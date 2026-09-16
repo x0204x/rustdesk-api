@@ -62,7 +62,7 @@ func TestFileCacheGet(t *testing.T) {
 
 func TestRedisCacheSet(t *testing.T) {
 	rc := NewRedis(&redis.Options{
-		Addr:     "192.168.1.168:6379",
+		Addr:     testRedisAddr(),
 		Password: "", // no password set
 		DB:       0,  // use default DB
 	})
@@ -75,7 +75,7 @@ func TestRedisCacheSet(t *testing.T) {
 
 func TestRedisCacheGet(t *testing.T) {
 	rc := NewRedis(&redis.Options{
-		Addr:     "192.168.1.168:6379",
+		Addr:     testRedisAddr(),
 		Password: "", // no password set
 		DB:       0,  // use default DB
 	})
