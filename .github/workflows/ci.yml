@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+      - stable
+  pull_request:
+    branches:
+      - develop
+      - stable
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-test:
+    name: Backend / Go 1.23.10
+    runs-on: ubuntu-24.04
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      TEST_REDIS_ADDR: 127.0.0.1:6379
+      CGO_ENABLED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.10"
+          cache: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Verify Go modules
+        run: go mod verify
+
+      - name: Check gofmt
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then
+            echo "The following Go files are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test ./... -count=1
+
+      - name: Build linux amd64
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -o dist/apimain-linux-amd64 \
+            ./cmd/apimain.go
+
+      - name: Upload amd64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-api-linux-amd64
+          path: dist/apimain-linux-amd64
+          if-no-files-found: error
+          retention-days: 7
+
+  arm64-build:
+    name: Linux ARM64 build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.10"
+          cache: true
+
+      - name: Install ARM64 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            file
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Build linux arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: "1"
+          CC: aarch64-linux-gnu-gcc
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -o dist/apimain-linux-arm64 \
+            ./cmd/apimain.go
+
+      - name: Verify ARM64 binary
+        run: |
+          file dist/apimain-linux-arm64
+          file dist/apimain-linux-arm64 | grep -q "ARM aarch64"
+
+      - name: Upload arm64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-api-linux-arm64
+          path: dist/apimain-linux-arm64
+          if-no-files-found: error
+          retention-days: 7
