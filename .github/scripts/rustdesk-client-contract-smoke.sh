@@ -321,8 +321,14 @@ fi
 python3 - "$scratch/shared-profiles.json" <<'PY'
 import json, pathlib, sys
 body = json.loads(pathlib.Path(sys.argv[1]).read_text())
-if not isinstance(body, dict) or not isinstance(body.get("total"), int) or not isinstance(body.get("data"), list):
-    raise SystemExit("shared address-book profile response is incompatible")
+if not isinstance(body, dict):
+    raise SystemExit("shared address-book profile response is not a JSON object")
+if "total" in body and not isinstance(body["total"], int):
+    raise SystemExit("shared address-book profile total is incompatible")
+data = body.get("data")
+# RustDesk 1.4.9 only iterates data when it is a List; an empty Go slice may encode as null.
+if data is not None and not isinstance(data, list):
+    raise SystemExit("shared address-book profile data is incompatible")
 print("PASS: RustDesk 1.4.9 shared address-book profile contract")
 PY
 
@@ -346,8 +352,14 @@ for spec in \
   python3 - "$scratch/group-$safe_name.json" "$safe_name" <<'PY'
 import json, pathlib, sys
 body = json.loads(pathlib.Path(sys.argv[1]).read_text())
-if not isinstance(body, dict) or not isinstance(body.get("total"), int) or not isinstance(body.get("data"), list):
-    raise SystemExit(sys.argv[2] + " response is incompatible")
+if not isinstance(body, dict):
+    raise SystemExit(sys.argv[2] + " response is not a JSON object")
+if "total" in body and not isinstance(body["total"], int):
+    raise SystemExit(sys.argv[2] + " total is incompatible")
+data = body.get("data")
+# RustDesk 1.4.9 tolerates absent/null data and only parses it when it is a List.
+if data is not None and not isinstance(data, list):
+    raise SystemExit(sys.argv[2] + " data is incompatible")
 print("PASS: RustDesk 1.4.9 group endpoint contract: " + sys.argv[2])
 PY
 done
