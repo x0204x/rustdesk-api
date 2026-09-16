@@ -199,6 +199,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/stable' }}
 
       - name: Build and push multi-arch image
+        id: image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -210,20 +211,14 @@ jobs:
           provenance: true
 
       - name: Inspect published image
-        run: |
-          docker buildx imagetools inspect \
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+        shell: bash
+        env:
+          SMOKE_IMAGE: ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
+        run: docker buildx imagetools inspect "$SMOKE_IMAGE"
 
-      - name: Smoke test amd64 image
-        run: |
-          docker run --rm \
-            --platform linux/amd64 \
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
-            --help | grep -q "RUSTDESK API SERVER"
-
-      - name: Smoke test arm64 image
-        run: |
-          docker run --rm \
-            --platform linux/arm64 \
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
-            --help | grep -q "RUSTDESK API SERVER"
+      - name: Runtime smoke test (amd64 and arm64)
+        shell: bash
+        timeout-minutes: 15
+        env:
+          SMOKE_IMAGE: ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
+        run: bash .github/scripts/api-runtime-smoke.sh
