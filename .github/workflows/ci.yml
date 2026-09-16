@@ -232,3 +232,10 @@ jobs:
         env:
           SMOKE_IMAGE: ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
         run: bash .github/scripts/api-runtime-smoke.sh
+
+      - name: RustDesk 1.4.9 API contract
+        shell: bash
+        timeout-minutes: 10
+        env:
+          SMOKE_IMAGE: ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
+        run: bash .github/scripts/rustdesk-client-contract-smoke.sh
