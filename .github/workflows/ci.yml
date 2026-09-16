@@ -157,6 +157,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate production Compose
+        shell: bash
+        run: |
+          cp deploy/.env.production.example deploy/.env.production
+          trap 'rm -f deploy/.env.production' EXIT
+          docker compose \
+            --env-file deploy/.env.production \
+            -f deploy/compose.production.yml \
+            config -q
+
       - name: Download amd64 binary
         uses: actions/download-artifact@v4
         with:

@@ -1,0 +1,51 @@
+services:
+  rustdesk-api:
+    image: ${RUSTDESK_API_IMAGE:?Set RUSTDESK_API_IMAGE in .env.production}
+    container_name: rustdesk-api
+    restart: unless-stopped
+    init: true
+
+    env_file:
+      - ./.env.production
+
+    ports:
+      - "127.0.0.1:21114:21114"
+
+    volumes:
+      - rustdesk-api-data:/app/data
+      - ${RUSTDESK_PUBLIC_KEY_FILE:-/opt/rustdesk-oss/data/id_ed25519.pub}:/run/secrets/rustdesk_id_ed25519_pub:ro
+
+    read_only: true
+
+    tmpfs:
+      - /app/runtime:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700
+      - /tmp:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700
+
+    cap_drop:
+      - ALL
+
+    security_opt:
+      - no-new-privileges:true
+
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: 1.0
+    stop_grace_period: 20s
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/21114'"
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  rustdesk-api-data:

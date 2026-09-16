@@ -73,6 +73,9 @@ start_api() {
   docker run --detach --pull=never --name "$container" \
     --platform "linux/$arch" \
     --memory 512m --cpus 1 --cap-drop ALL --security-opt no-new-privileges \
+    --read-only \
+    --tmpfs /app/runtime:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700 \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700 \
     --publish 127.0.0.1::21114 \
     --mount "type=volume,source=$volume,target=/app/data" \
     --env RUSTDESK_API_LANG=en \
@@ -227,6 +230,17 @@ while IFS=$'\t' read -r arch platform_image; do
     exit 1
   fi
   echo "PASS: linux/$arch local image platform verified"
+
+  stage="inspect-image-user"
+  last_log="$scratch/user-$arch.log"
+  timeout 30s docker image inspect --format '{{.Config.User}}' \
+    "$platform_image" >"$last_log" 2>&1
+  image_user="$(cat "$last_log")"
+  if [[ "$image_user" != "10001:10001" ]]; then
+    echo "Image user is not the expected unprivileged UID/GID." >&2
+    exit 1
+  fi
+  echo "PASS: linux/$arch image runs as UID/GID 10001:10001"
 
   stage="help-command"
   last_log="$scratch/help-$arch.txt"

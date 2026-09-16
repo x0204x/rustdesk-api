@@ -24,12 +24,18 @@ COPY runtime ./runtime
 
 RUN mkdir -p \
     /app/data \
-    /app/runtime/cache
+    /app/runtime/cache \
+    && chown -R 10001:10001 \
+       /app/data \
+       /app/runtime \
+       /app/resources/public
 
 COPY --chmod=755 dist/${TARGETARCH}/apimain-linux-${TARGETARCH} ./apimain
 
 VOLUME ["/app/data"]
 
 EXPOSE 21114
+
+USER 10001:10001
 
 ENTRYPOINT ["./apimain"]

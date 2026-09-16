@@ -5,3 +5,4 @@ runtime/*
 resources/admin
 release
 data/rustdeskapi.db
+deploy/.env.production
