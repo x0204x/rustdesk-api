@@ -1,0 +1,35 @@
+FROM ubuntu:24.04
+
+ARG TARGETARCH
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV RUSTDESK_API_APP_WEB_CLIENT=0
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY conf ./conf
+
+COPY resources/i18n ./resources/i18n
+COPY resources/public ./resources/public
+COPY resources/templates ./resources/templates
+COPY resources/version ./resources/version
+
+COPY runtime ./runtime
+
+RUN mkdir -p \
+    /app/data \
+    /app/runtime/cache
+
+COPY --chmod=755 dist/${TARGETARCH}/apimain-linux-${TARGETARCH} ./apimain
+
+VOLUME ["/app/data"]
+
+EXPOSE 21114
+
+ENTRYPOINT ["./apimain"]
