@@ -21,24 +21,40 @@ scratch="$(mktemp -d "${RUNNER_TEMP%/}/rustdesk-api-smoke.XXXXXXXX")"
 container=""
 volume=""
 volume_created=0
+arch="not-started"
+stage="initializing"
+last_log=""
+
+print_diagnostic_log() {
+  python3 - "$1" <<'PYLOG'
+import pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(0)
+for line in path.read_text(errors="replace").splitlines()[-80:]:
+    if re.search(r"password|passwd|secret|token|authorization|credential", line, re.I):
+        print("diagnostic: [potential credential line omitted]")
+    else:
+        # Prefix untrusted output so it cannot start a workflow command.
+        print("diagnostic: " + line)
+PYLOG
+}
 
 cleanup() {
   local rc=$?
   trap - EXIT
+  if (( rc != 0 )); then
+    echo "FAIL: architecture=$arch stage=$stage exit=$rc" >&2
+    if [[ -n "$last_log" ]]; then
+      print_diagnostic_log "$last_log" >&2 || true
+    fi
+  fi
   if [[ -n "$container" ]]; then
     if (( rc != 0 )); then
       docker inspect --format 'State={{.State.Status}} ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}}' "$container" 2>/dev/null || true
       # Initialization logs can contain a generated administrator password.
       docker logs --tail 80 "$container" >"$scratch/failure.log" 2>&1 || true
-      python3 - "$scratch/failure.log" <<'PY' || true
-import pathlib, re, sys
-for line in pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines():
-    if re.search(r"password|passwd|secret|token|authorization|credential", line, re.I):
-        print("[potential credential line omitted]")
-    else:
-        # Do not allow container output to become a workflow command.
-        print("container-log: " + line)
-PY
+      print_diagnostic_log "$scratch/failure.log" >&2 || true
     fi
     docker rm --force --volumes "$container" >/dev/null 2>&1 || true
   fi
@@ -51,6 +67,8 @@ PY
 trap cleanup EXIT
 
 start_api() {
+  stage="start-api"
+  last_log=""
   container="rdapi-${arch}-$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
   docker run --detach --pull=never --name "$container" \
     --platform "linux/$arch" \
@@ -69,8 +87,10 @@ start_api() {
     --env RUSTDESK_API_RUSTDESK_API_SERVER=http://127.0.0.1:21114 \
     --env RUSTDESK_API_RUSTDESK_KEY_FILE=/dev/null \
     --env "RUSTDESK_API_JWT_KEY=$jwt_key" \
-    "$SMOKE_IMAGE" >/dev/null
+    "$platform_image" >/dev/null
 
+  stage="api-http-checks"
+  last_log="$scratch/curl.err"
   local address deadline ready=0
   address="$(docker port "$container" 21114/tcp)"
   if [[ ! "$address" =~ ^127\.0\.0\.1:[0-9]+$ ]]; then
@@ -112,6 +132,8 @@ PY
 
 snapshot_db() {
   local phase="$1" snapshot="$scratch/$arch-$1"
+  stage="sqlite-$phase"
+  last_log=""
   # Copy the complete directory after stopping, not a live SQLite file.
   docker stop --time 20 "$container" >/dev/null
   mkdir -p "$snapshot"
@@ -146,16 +168,78 @@ PY
   container=""
 }
 
-for arch in amd64 arm64; do
-  echo "Testing linux/$arch: $SMOKE_IMAGE"
-  timeout 180s docker pull --platform "linux/$arch" "$SMOKE_IMAGE" >"$scratch/pull-$arch.log" 2>&1
+# Select platform-specific child manifests from THIS build's immutable index.
+# A legacy Docker image store cannot keep both platforms under one index ref.
+stage="read-image-index"
+last_log="$scratch/image-index.err"
+timeout 60s docker buildx imagetools inspect --raw "$SMOKE_IMAGE" \
+  >"$scratch/image-index.json" 2>"$last_log"
+stage="validate-image-index"
+last_log=""
+python3 - "$scratch/image-index.json" "${SMOKE_IMAGE%@*}" >"$scratch/platform-images.tsv" <<'PYINDEX'
+import json, pathlib, re, sys
+index = json.loads(pathlib.Path(sys.argv[1]).read_text())
+if not isinstance(index, dict) or not isinstance(index.get("manifests"), list):
+    raise SystemExit("Expected a multi-platform image index")
+allowed_types = {
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+}
+selected = []
+for arch in ("amd64", "arm64"):
+    matches = []
+    for manifest in index["manifests"]:
+        if not isinstance(manifest, dict):
+            raise SystemExit("Invalid manifest descriptor")
+        platform = manifest.get("platform") or {}
+        annotations = manifest.get("annotations") or {}
+        if annotations.get("vnd.docker.reference.type") == "attestation-manifest":
+            continue
+        if manifest.get("mediaType") not in allowed_types:
+            continue
+        if platform.get("os") == "linux" and platform.get("architecture") == arch:
+            supported_variants = ("", "v8") if arch == "arm64" else ("", "v1")
+            if platform.get("variant", "") in supported_variants:
+                matches.append(manifest.get("digest", ""))
+    if len(matches) != 1 or not re.fullmatch(r"sha256:[a-f0-9]{64}", matches[0]):
+        raise SystemExit("Expected exactly one valid image manifest for linux/" + arch)
+    selected.append((arch, matches[0]))
+if selected[0][1] == selected[1][1]:
+    raise SystemExit("Different architectures unexpectedly share one manifest")
+for arch, digest in selected:
+    print(arch + "\t" + sys.argv[2] + "@" + digest)
+PYINDEX
+
+while IFS=$'\t' read -r arch platform_image; do
+  echo "Testing linux/$arch: $platform_image"
+  stage="pull-image"
+  last_log="$scratch/pull-$arch.log"
+  timeout 180s docker pull --platform "linux/$arch" "$platform_image" >"$last_log" 2>&1
+  echo "PASS: linux/$arch image pulled"
+
+  stage="inspect-local-platform"
+  last_log="$scratch/inspect-$arch.log"
+  timeout 30s docker image inspect --format '{{.Os}}/{{.Architecture}}' \
+    "$platform_image" >"$last_log" 2>&1
+  actual_platform="$(cat "$last_log")"
+  if [[ "$actual_platform" != "linux/$arch" ]]; then
+    echo "Pulled image platform does not match linux/$arch." >&2
+    exit 1
+  fi
+  echo "PASS: linux/$arch local image platform verified"
+
+  stage="help-command"
+  last_log="$scratch/help-$arch.txt"
   container="rdapi-help-${arch}-$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
   # Separate commands preserve docker's exit status; no early-closing grep pipe.
   timeout 30s docker run --rm --pull=never --name "$container" \
-    --platform "linux/$arch" "$SMOKE_IMAGE" --help >"$scratch/help-$arch.txt"
+    --platform "linux/$arch" "$platform_image" --help >"$last_log" 2>&1
   container=""
-  grep -Fq "RUSTDESK API SERVER" "$scratch/help-$arch.txt"
+  stage="check-help-output"
+  grep -Fq "RUSTDESK API SERVER" "$last_log"
   echo "PASS: linux/$arch --help exited successfully"
+  last_log=""
+  stage="create-test-volume"
 
   volume="rdapi-smoke-${arch}-$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
   if docker volume inspect "$volume" >/dev/null 2>&1; then
@@ -169,10 +253,11 @@ for arch in amd64 arm64; do
   snapshot_db first
   start_api
   snapshot_db second
+  stage="remove-test-volume"
   docker volume rm "$volume" >/dev/null
   volume_created=0
   volume=""
   echo "PASS: linux/$arch runtime smoke test"
-done
+done <"$scratch/platform-images.tsv"
 
 echo "PASS: both image architectures passed the bounded runtime checks"
