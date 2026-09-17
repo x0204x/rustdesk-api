@@ -11,6 +11,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates \
        tzdata \
+       perl-base \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge '5.38.2-3.2ubuntu0.6' \
     && rm -rf /var/lib/apt/lists/*
 
 COPY conf ./conf
