@@ -140,9 +140,16 @@ func (ct *Login) Captcha(c *gin.Context) {
 // @Router /admin/logout [post]
 func (ct *Login) Logout(c *gin.Context) {
 	u := service.AllService.UserService.CurUser(c)
-	token, ok := c.Get("token")
-	if ok {
-		service.AllService.UserService.Logout(u, token.(string))
+	value, exists := c.Get("token")
+	token, valid := value.(string)
+	if u == nil || u.Id == 0 || !exists || !valid || token == "" {
+		c.AbortWithStatusJSON(401, gin.H{"error": "Unauthorized"})
+		return
+	}
+	if err := service.AllService.UserService.Logout(u, token); err != nil {
+		// Do not claim success or expose database errors/token values.
+		c.AbortWithStatusJSON(500, gin.H{"error": "Logout failed"})
+		return
 	}
 	response.Success(c, nil)
 }
